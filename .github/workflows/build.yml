@@ -1,0 +1,65 @@
+name: Build HL2-MC
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the VS2022-ready Source SDK 2013
+        shell: pwsh
+        run: git clone --depth 1 https://github.com/Source-SDK-Resources/source-sdk-vs2022.git sdk
+
+      - name: Copy the mod's code into the SDK
+        shell: pwsh
+        run: |
+          Expand-Archive -Path hl2mc-src.zip -DestinationPath modsrc -Force
+          robocopy modsrc\src sdk\sp\src /E /NFL /NDL /NJH /NJS
+          if ($LASTEXITCODE -ge 8) { exit 1 }
+          if (!(Test-Path sdk\sp\src\game\server\mc\mc_player.cpp)) { Write-Error "mod files missing"; exit 1 }
+          exit 0
+
+      - name: Add the registry key the project generator looks for
+        shell: cmd
+        run: reg add "HKLM\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\10.0\Projects\{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}" /v DefaultProjectExtension /t REG_SZ /d vcproj /f
+
+      - name: Generate the Visual Studio projects
+        shell: cmd
+        working-directory: sdk\sp\src
+        run: |
+          call creategameprojects.bat
+          if not exist games.sln exit /b 1
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build (Release)
+        shell: cmd
+        working-directory: sdk\sp\src
+        run: msbuild games.sln /m /p:Configuration=Release /p:Platform=Win32 /v:minimal /nologo
+
+      - name: Assemble the ready-to-play mod folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out\hl2mc | Out-Null
+          robocopy sdk\sp\game\mod_hl2 out\hl2mc /E /NFL /NDL /NJH /NJS
+          if ($LASTEXITCODE -ge 8) { exit 1 }
+          robocopy modsrc\mod\hl2mc out\hl2mc /E /NFL /NDL /NJH /NJS
+          if ($LASTEXITCODE -ge 8) { exit 1 }
+          foreach ($dll in 'client.dll','server.dll') {
+            if (!(Test-Path "out\hl2mc\bin\$dll")) {
+              Write-Error "$dll was not built"
+              Get-ChildItem -Recurse sdk\sp -Filter *.dll | Select-Object FullName
+              exit 1
+            }
+          }
+          Get-ChildItem out\hl2mc\bin
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hl2mc-mod-folder
+          path: out
