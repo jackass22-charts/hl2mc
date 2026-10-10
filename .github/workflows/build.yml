@@ -48,6 +48,9 @@ jobs:
         shell: pwsh
         working-directory: sdk\sp\src
         run: |
+          # Newer compilers add warnings Valve's 2013 code trips; the projects treat warnings as errors (/WX).
+          # _CL_ is appended to every compiler command line, so /WX- turns that off without editing Valve's projects.
+          $env:_CL_ = '/WX-'
           $projects = @(
             'mathlib\mathlib.vcxproj',
             'tier1\tier1.vcxproj',
