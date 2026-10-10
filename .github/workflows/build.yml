@@ -36,10 +36,34 @@ jobs:
 
       - uses: microsoft/setup-msbuild@v2
 
-      - name: Build (Release)
+      - name: Show what the generator produced
         shell: cmd
         working-directory: sdk\sp\src
-        run: msbuild games.sln /m /p:Configuration=Release /p:Platform=Win32 /v:minimal /nologo
+        run: |
+          dir /s /b *.vcxproj | findstr /v /i thirdparty
+          findstr /i "Release" games.sln
+          exit /b 0
+
+      - name: Build (Release)
+        shell: pwsh
+        working-directory: sdk\sp\src
+        run: |
+          $projects = @(
+            'mathlib\mathlib.vcxproj',
+            'tier1\tier1.vcxproj',
+            'raytrace\raytrace.vcxproj',
+            'vgui2\vgui_controls\vgui_controls.vcxproj',
+            'game\server\server_hl2.vcxproj',
+            'game\client\client_hl2.vcxproj'
+          )
+          New-Item -ItemType Directory -Force $env:GITHUB_WORKSPACE\logs | Out-Null
+          foreach ($p in $projects) {
+            $name = [IO.Path]::GetFileNameWithoutExtension($p)
+            Write-Host "===== Building $p ====="
+            msbuild $p /m /nologo /v:minimal /p:Configuration=Release /p:Platform=Win32 "/flp:logfile=$env:GITHUB_WORKSPACE\logs\$name.log;verbosity=normal"
+            if ($LASTEXITCODE -ne 0) { Write-Error "Build failed: $p (see the build-logs artifact)"; exit 1 }
+          }
+          exit 0
 
       - name: Assemble the ready-to-play mod folder
         shell: pwsh
@@ -49,7 +73,12 @@ jobs:
           if ($LASTEXITCODE -ge 8) { exit 1 }
           robocopy modsrc\mod\hl2mc out\hl2mc /E /NFL /NDL /NJH /NJS
           if ($LASTEXITCODE -ge 8) { exit 1 }
+          New-Item -ItemType Directory -Force out\hl2mc\bin | Out-Null
           foreach ($dll in 'client.dll','server.dll') {
+            if (!(Test-Path "out\hl2mc\bin\$dll")) {
+              $found = Get-ChildItem -Recurse sdk\sp\src\game -Filter $dll -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch 'episodic' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+              if ($found) { Copy-Item $found.FullName "out\hl2mc\bin\$dll" }
+            }
             if (!(Test-Path "out\hl2mc\bin\$dll")) {
               Write-Error "$dll was not built"
               Get-ChildItem -Recurse sdk\sp -Filter *.dll | Select-Object FullName
@@ -63,3 +92,10 @@ jobs:
         with:
           name: hl2mc-mod-folder
           path: out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs
+          path: logs
+          if-no-files-found: ignore
